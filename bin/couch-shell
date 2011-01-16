@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby19
+
+require "couch-shell"
+
+CouchShell.run ARGV
