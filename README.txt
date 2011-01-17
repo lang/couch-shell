@@ -1,11 +1,14 @@
 couch-shell is a basic shell to interact with a CouchDB server.
 
-Use `ruby -I lib bin/couch-shell SERVER_URL' to start from a repository
-checkout.
+Install with rubygems:
+
+  $ sudo gem install couch-shell
+
+Only tested with Ruby 1.9!
 
 Example session:
 
-  $ ruby19 -I lib bin/couch-shell http://mambofulani.couchone.com/
+  $ couch-shell http://mambofulani.couchone.com/
   couch-shell 0.0.1
   Set server to http://mambofulani.couchone.com:80/
   GET / 200 OK
