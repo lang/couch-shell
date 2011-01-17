@@ -1,10 +1,9 @@
 # -*- encoding: utf-8 -*-
 
 require "couch-shell/shell"
+require "couch-shell/version"
 
 module CouchShell
-
-  VERSION = "0.0.1"
 
   def self.run(args)
     puts "couch-shell #{VERSION}"
