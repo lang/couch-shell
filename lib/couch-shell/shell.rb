@@ -2,8 +2,10 @@
 
 require "uri"
 require "net/http"
-require "json"
 require "highline"
+require "couch-shell/response"
+require "couch-shell/ring_buffer"
+require "couch-shell/eval_context"
 
 module CouchShell
 
@@ -25,8 +27,12 @@ module CouchShell
 
     end
 
-    PREDEFINED_VARS = ["uuid", "id", "rev", "idr", "content-type"].freeze
-    JSON_CONTENT_TYPES = ["application/json", "text/plain"].freeze
+    PREDEFINED_VARS = [
+      "uuid", "id", "rev", "idr",
+      "content-type", "server"
+    ].freeze
+
+    JSON_DOC_START_RX = /\A[ \t\n\r]*[\(\{]/
 
     def initialize(stdin, stdout, stderr)
       @stdin = stdin
@@ -35,15 +41,26 @@ module CouchShell
       @server_url = nil
       @pathstack = []
       @highline = HighLine.new(@stdin, @stdout)
-      @last_response = nil
-      @last_response_json = nil
+      @responses = RingBuffer.new(10)
+      @eval_context = EvalContext.new(self)
+    end
+
+    def normalize_server_url(url)
+      return nil if url.nil?
+      # remove trailing slash
+      url = url.sub(%r{/\z}, '')
+      # prepend http:// if scheme is omitted
+      if url =~ /\A\p{Alpha}(?:\p{Alpha}|\p{Digit}|\+|\-|\.)*:/
+        url
+      else
+        "http://#{url}"
+      end
     end
 
     def server=(url)
       if url
-        @server_url = URI.parse(url.sub(%r{/\z}, ''))
-        msg "Set server to #{@server_url.scheme}://" +
-          "#{@server_url.host}:#{@server_url.port}/#{@server_url.path}"
+        @server_url = URI.parse(normalize_server_url(url))
+        msg "Set server to #{lookup_var 'server'}"
         request("GET", nil)
       else
         @server_url = nil
@@ -87,49 +104,14 @@ module CouchShell
       @stderr.puts @highline.color(str, :red)
     end
 
-    def response_info(str)
-      @stdout.puts @highline.color(str, :cyan)
-    end
 
-    def print_last_response
-      res = @last_response
-      response_info "#{res.code} #{res.message}"
-      if res.body
-        if JSON_CONTENT_TYPES.include?(res.content_type)
-          @stdout.puts JSON.pretty_generate(last_response_json)
-        else
-          @stdout.puts res.body if res.body
-        end
-      end
-    end
-
-    def response_json(res)
-      if !res || res.body.nil? || res.body.empty?
-        return nil
-      end
-      JSON.parse res.body
-    rescue ParseError
-      false
-    end
-
-    def last_response_json
-      if @last_response_json
-        return @last_response_json
-      end
-      if @last_response
-        @last_response_json = response_json(@last_response)
-      end
-    end
-
-    def last_response_ok?
-      @last_response && @last_response.code == "200"
-    end
-
-    def last_response_attr(name, altname = nil)
-      json = last_response_json
-      if json && json.kind_of?(Hash) &&
-          (json.has_key?(name) || json.has_key?(altname))
-        json.has_key?(name) ? json[name] : json[altname]
+    def print_response(res, label = "")
+      @stdout.print @highline.color("#{res.code} #{res.message}", :cyan)
+      msg " #{label}"
+      if res.json
+        @stdout.puts res.json.format
+      elsif res.body
+        @stdout.puts res.body
       end
     end
 
@@ -151,17 +133,25 @@ module CouchShell
                  Net::HTTP::Get
                when "PUT"
                  Net::HTTP::Put
+               when "POST"
+                 Net::HTTP::Post
                when "DELETE"
                  Net::HTTP::Delete
                else
                  raise "unsupported http method: `#{method}'"
                end).new(fpath)
-        req.body = body if body
-        res = http.request(req)
-        @last_response = res
-        @last_response_json = nil
+        if body
+          req.body = body
+          if req.content_type.nil? && req.body =~ JSON_DOC_START_RX
+            req.content_type = "application/json"
+          end
+        end
+        res = Response.new(http.request(req))
+        @responses << res
         rescode = res.code
-        print_last_response
+        vars = ["r#{@responses.index}"]
+        vars << ["j#{@responses.index}"] if res.json
+        print_response res, "  vars: #{vars.join(', ')}"
       end
       rescode
     end
@@ -237,7 +227,7 @@ module CouchShell
       String.new.force_encoding(str.encoding).tap { |res|
         escape = false
         dollar = false
-        var = nil
+        expr = nil
         str.each_char { |c|
           if escape
             res << c
@@ -250,21 +240,21 @@ module CouchShell
             next
           elsif c == '('
             if dollar
-              var = ""
+              expr = ""
             else
               res << c
             end
           elsif c == ')'
-            if var
-              res << var_interpolation_val(var)
-              var = nil
+            if expr
+              res << shell_eval(expr)
+              expr = nil
             else
               res << c
             end
           elsif dollar
             res << "$"
-          elsif var
-            var << c
+          elsif expr
+            expr << c
           else
             res << c
           end
@@ -273,12 +263,16 @@ module CouchShell
       }
     end
 
-    def var_interpolation_val(var)
+    def shell_eval(expr)
+      @eval_context.instance_eval(expr)
+    end
+
+    def lookup_var(var)
       case var
       when "uuid"
         command_uuids nil
-        if last_response_ok?
-          json = last_response_json
+        if @responses.current(&:ok?)
+          json = @responses.current.json
           if json && (uuids = json["uuids"]) && uuids.kind_of?(Array) && uuids.size > 0
             uuids[0]
           else
@@ -289,15 +283,40 @@ module CouchShell
           raise ShellUserError, "interpolation failed"
         end
       when "id"
-        last_response_attr("id", "_id") or
+        @responses.current { |r| r.attr "id", "_id" } or
           raise ShellUserError, "variable `id' not set"
       when "rev"
-        last_response_attr("rev", "_rev") or
+        @responses.current { |r| r.attr "rev", "_rev" } or
           raise ShellUserError, "variable `rev' not set"
       when "idr"
-        "#{var_interpolation_val 'id'}?rev=#{var_interpolation_val 'rev'}"
+        "#{lookup_var 'id'}?rev=#{lookup_var 'rev'}"
       when "content-type"
-        @last_response && @last_response.content_type
+        @responses.current(&:content_type)
+      when "server"
+        if @server_url
+          u = @server_url
+          "#{u.scheme}://#{u.host}:#{u.port}#{u.path}"
+        else
+          raise ShellUserError, "variable `server' not set"
+        end
+      when /\Ar(\d)\z/
+        i = $1.to_i
+        if @responses.readable_index?(i)
+          @responses[i]
+        else
+          raise ShellUserError, "no response index #{i}"
+        end
+      when /\Aj(\d)\z/
+        i = $1.to_i
+        if @responses.readable_index?(i)
+          if @responses[i].json
+            @responses[i].json
+          else
+            raise ShellUserError, "no json in response #{i}"
+          end
+        else
+          raise ShellUserError, "no response index #{i}"
+        end
       else
         raise UndefinedVariable.new(var)
       end
@@ -310,6 +329,15 @@ module CouchShell
     def command_put(argstr)
       url, body = argstr.split(/\s+/, 2)
       request "PUT", interpolate(url), body
+    end
+
+    def command_post(argstr)
+      if argstr =~ JSON_DOC_START_RX
+        url, body = nil, argstr
+      else
+        url, body = argstr.split(/\s+/, 2)
+      end
+      request "POST", interpolate(url), body
     end
 
     def command_delete(argstr)
@@ -345,10 +373,27 @@ module CouchShell
 
     def command_print(argstr)
       unless argstr
-        errmsg "variable name required"
+        errmsg "expression required"
         return
       end
-      @stdout.puts var_interpolation_val(argstr)
+      @stdout.puts shell_eval(argstr)
+    end
+
+    def command_format(argstr)
+      unless argstr
+        errmsg "expression required"
+        return
+      end
+      val = shell_eval(argstr)
+      if val.respond_to?(:couch_shell_format_string)
+        @stdout.puts val.couch_shell_format_string
+      else
+        @stdout.puts val
+      end
+    end
+
+    def command_server(argstr)
+      self.server = argstr
     end
 
   end
