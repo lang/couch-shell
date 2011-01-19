@@ -24,4 +24,6 @@ Gem::Specification.new do |g|
   #g.rdoc_options = ["--main=README.txt", "--charset=UTF-8"]
   g.homepage = "http://github.com/lang/couch-shell"
   #g.rubyforge_project = "unicode-utils"
+  g.add_dependency "httpclient", ">= 2.1.6.1"
+  g.add_dependency "highline", ">= 1.6.1"
 end

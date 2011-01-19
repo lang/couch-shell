@@ -11,7 +11,7 @@ module CouchShell
       "application/json", "text/plain"
     ].freeze
 
-    # +response+ is a Net::HTTP response
+    # +response+ is a HTTP::Message from httpclient library
     def initialize(response)
       @res = response
       @json = nil
@@ -23,9 +23,9 @@ module CouchShell
     def json
       unless @computed_json
         if JSON_CONTENT_TYPES.include?(content_type) &&
-            !@res.body.nil? && !@res.body.empty?
+            !body.nil? && !body.empty?
           begin
-            @json = JsonValue.wrap(JSON.parse(@res.body))
+            @json = JsonValue.wrap(JSON.parse(body))
           rescue JSON::ParserError
             @json = false
           end
@@ -36,11 +36,11 @@ module CouchShell
     end
 
     def code
-      @res.code
+      @res.status.to_s
     end
 
     def message
-      @res.message
+      @res.reason
     end
 
     def ok?
@@ -48,11 +48,11 @@ module CouchShell
     end
 
     def body
-      @res.body
+      @res.content
     end
 
     def content_type
-      @res.content_type
+      @res.contenttype.sub(/;[^;]*\z/, '')
     end
 
     def attr(name, altname = nil)

@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 
 require "uri"
-require "net/http"
+require "httpclient"
 require "highline"
 require "couch-shell/response"
 require "couch-shell/ring_buffer"
@@ -27,6 +27,22 @@ module CouchShell
 
     end
 
+    class FileToUpload
+
+      attr_reader :filename, :content_type
+
+      def initialize(filename, content_type = nil)
+        @filename = filename
+        @content_type = content_type
+      end
+
+      def content_type!
+        # TODO: use mime-types and/or file to guess mime type
+        content_type || "application/octet-stream"
+      end
+
+    end
+
     PREDEFINED_VARS = [
       "uuid", "id", "rev", "idr",
       "content-type", "server"
@@ -43,6 +59,7 @@ module CouchShell
       @highline = HighLine.new(@stdin, @stdout)
       @responses = RingBuffer.new(10)
       @eval_context = EvalContext.new(self)
+      @httpclient = HTTPClient.new
     end
 
     def normalize_server_url(url)
@@ -126,34 +143,35 @@ module CouchShell
         errmsg "Protocol #{@server_url.scheme} not supported, use http."
         return
       end
-      rescode = nil
-      Net::HTTP.start(@server_url.host, @server_url.port) do |http|
-        req = (case method
-               when "GET"
-                 Net::HTTP::Get
-               when "PUT"
-                 Net::HTTP::Put
-               when "POST"
-                 Net::HTTP::Post
-               when "DELETE"
-                 Net::HTTP::Delete
-               else
-                 raise "unsupported http method: `#{method}'"
-               end).new(fpath)
-        if body
-          req.body = body
-          if req.content_type.nil? && req.body =~ JSON_DOC_START_RX
-            req.content_type = "application/json"
-          end
-        end
-        res = Response.new(http.request(req))
-        @responses << res
-        rescode = res.code
-        vars = ["r#{@responses.index}"]
-        vars << ["j#{@responses.index}"] if res.json
-        print_response res, "  vars: #{vars.join(', ')}"
+      res = http_client_request(method, expand(path), body)
+      @responses << res
+      rescode = res.code
+      vars = ["r#{@responses.index}"]
+      vars << ["j#{@responses.index}"] if res.json
+      print_response res, "  vars: #{vars.join(', ')}"
+      res.code
+    end
+
+    def http_client_request(method, absolute_url, body)
+      file = nil
+      headers = {}
+      if body.kind_of?(FileToUpload)
+        file_to_upload = body
+        file = File.open(file_to_upload.filename, "rb")
+        body = [{'Content-Type' => file_to_upload.content_type!,
+                 :content => file}]
+      elsif body && body =~ JSON_DOC_START_RX
+        headers['Content-Type'] = "application/json"
       end
-      rescode
+      res = @httpclient.request(method, absolute_url, body, headers)
+      Response.new(res)
+    ensure
+      file.close if file
+    end
+
+    def expand(url)
+      u = @server_url
+      "#{u.scheme}://#{u.host}:#{u.port}#{full_path url}"
     end
 
     def full_path(path)
@@ -322,22 +340,31 @@ module CouchShell
       end
     end
 
+    def request_command_with_body(method, argstr)
+      if argstr =~ JSON_DOC_START_RX
+        url, bodyarg = nil, argstr
+      else
+        url, bodyarg= argstr.split(/\s+/, 2)
+      end
+      if bodyarg.start_with?("@")
+        filename, content_type = bodyarg[1..-1].split(/\s+/, 2)
+        body = FileToUpload.new(filename, content_type)
+      else
+        body = bodyarg
+      end
+      request method, interpolate(url), body
+    end
+
     def command_get(argstr)
       request "GET", interpolate(argstr)
     end
 
     def command_put(argstr)
-      url, body = argstr.split(/\s+/, 2)
-      request "PUT", interpolate(url), body
+      request_command_with_body("PUT", argstr)
     end
 
     def command_post(argstr)
-      if argstr =~ JSON_DOC_START_RX
-        url, body = nil, argstr
-      else
-        url, body = argstr.split(/\s+/, 2)
-      end
-      request "POST", interpolate(url), body
+      request_command_with_body("POST", argstr)
     end
 
     def command_delete(argstr)
@@ -394,6 +421,10 @@ module CouchShell
 
     def command_server(argstr)
       self.server = argstr
+    end
+
+    def command_expand(argstr)
+      @stdout.puts expand(interpolate(argstr))
     end
 
   end
