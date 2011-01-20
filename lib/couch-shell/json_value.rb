@@ -25,8 +25,16 @@ module CouchShell
       end
     end
 
-    attr_reader :type
-    attr_reader :ruby_value
+    def self.parse(str)
+      if str.start_with?("[") || str.start_with?("{") # optimization
+        wrap(::JSON.parse(str))
+      else
+        # JSON parses only JSON documents, i.e. an object or an array. Thus we
+        # box the given json value in an array and unbox it after parsing to
+        # allow parsing of any json value.
+        wrap(::JSON.parse("[#{str}]")[0])
+      end
+    end
 
     def initialize(value, ruby_value)
       @value = value
@@ -47,15 +55,15 @@ module CouchShell
               when nil
                 :null
               else
-                raise "#{value.class} is not a valid json type"
+                ::Kernel.raise "#{value} is not of a valid json type"
               end
     end
 
     def respond_to?(msg)
       msg == :format || msg == :couch_shell_format_string ||
         msg == :type || msg == :ruby_value || msg == :to_s ||
-        (@type == :object && @value.has_key?(msg.to_s)) ||
-        @value.respond_to?(msg)
+        msg == :couch_shell_ruby_value! ||
+        (@type == :object && @value.has_key?(msg.to_s))
     end
 
     def method_missing(msg, *args)
@@ -65,11 +73,16 @@ module CouchShell
           return @value[msg_str]
         end
       end
-      @value.__send__(msg, *args)
+      super
+    end
+
+    def [](i)
+      ::Kernel.raise ::TypeError unless @type == :array
+      @value[i]
     end
 
     def to_s
-      case type
+      case @type
       when :object, :array
         ::JSON.generate(@ruby_value)
       when :null
@@ -80,7 +93,7 @@ module CouchShell
     end
 
     def format
-      case type
+      case @type
       when :object, :array
         ::JSON.pretty_generate(@ruby_value)
       when :null
@@ -92,6 +105,33 @@ module CouchShell
 
     def couch_shell_format_string
       format
+    end
+
+    def delete_attr!(name)
+      ::Kernel.raise ::TypeError unless @type == :object
+      @ruby_value.delete(name)
+      @value.delete(name)
+    end
+
+    def set_attr!(name, value)
+      ::Kernel.raise ::TypeError unless @type == :object
+      v = value.respond_to?(:couch_shell_ruby_value!) ?
+        value.couch_shell_ruby_value! : value
+      @ruby_value[name] = v
+      @value[name] = JsonValue.wrap(v)
+    end
+
+    def couch_shell_ruby_value!
+      @ruby_value
+    end
+
+    def nil?
+      false
+    end
+
+    def attr_or_nil!(name)
+      return nil unless @type == :object
+      @value[name]
     end
 
   end
