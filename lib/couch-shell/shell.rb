@@ -5,15 +5,24 @@ require "uri"
 require "net/http"
 require "httpclient"
 require "highline"
+require "couch-shell/version"
 require "couch-shell/response"
 require "couch-shell/ring_buffer"
 require "couch-shell/eval_context"
 
 module CouchShell
 
+  # Starting a shell:
+  #
+  #   require "couch-shell/shell"
+  #
+  #   shell = CouchShell::Shell.new(STDIN, STDOUT, STDERR)
+  #   # returns at end of STDIN or on a quit command
+  #   shell.read_execute_loop
+  #
   class Shell
 
-    class BreakReplLoop < Exception
+    class Quit < Exception
     end
 
     class ShellUserError < Exception
@@ -62,6 +71,9 @@ module CouchShell
       @responses = RingBuffer.new(10)
       @eval_context = EvalContext.new(self)
       @viewtext = nil
+      @stdout.puts "couch-shell #{VERSION}"
+      @username = nil
+      @password = nil
     end
 
     def normalize_server_url(url)
@@ -186,6 +198,9 @@ module CouchShell
                else
                  raise "unsupported http method: `#{method}'"
                end).new(fpath)
+        if @username && @password
+          req.basic_auth @username, @password
+        end
         if body
           req.body = body
           if req.content_type.nil? && req.body =~ JSON_DOC_START_RX
@@ -203,12 +218,17 @@ module CouchShell
       if body.kind_of?(FileToUpload)
         file_to_upload = body
         file = File.open(file_to_upload.filename, "rb")
-        body = [{'Content-Type' => file_to_upload.content_type!,
-                 :content => file}]
+        #body = [{'Content-Type' => file_to_upload.content_type!,
+        #         :content => file}]
+        body = {'upload' => file}
       elsif body && body =~ JSON_DOC_START_RX
         headers['Content-Type'] = "application/json"
       end
-      res = HTTPClient.new.request(method, absolute_url, body, headers)
+      hclient = HTTPClient.new
+      if @username && @password
+        hclient.set_auth lookup_var("server"), @username, @password
+      end
+      res = hclient.request(method, absolute_url, body, headers)
       Response.new(res)
     ensure
       file.close if file
@@ -266,11 +286,36 @@ module CouchShell
       end
     end
 
-    def rep
-      input = read
+    # When the user enters something, it is passed to this method for
+    # execution. You may call if programmatically to simulate user input.
+    #
+    # If input is nil, it is interpreted as "end of input", raising a
+    # CouchShell::Shell::Quit exception. This exception is also raised by other
+    # commands (e.g. "exit" and "quit"). All other exceptions are caught and
+    # displayed on stderr.
+    def execute(input)
+      begin
+        execute!(input)
+      rescue Quit => e
+        raise e
+      rescue Interrupt
+        @stdout.puts
+        errmsg "interrupted"
+      rescue UndefinedVariable => e
+        errmsg "Variable `" + e.varname + "' is not defined."
+      rescue ShellUserError => e
+        errmsg e.message
+      rescue Exception => e
+        errmsg e.message
+        errmsg e.backtrace[0..5].join("\n")
+      end
+    end
+
+    # Basic execute without error handling. Raises various exceptions.
+    def execute!(input)
       case input
       when nil
-        raise BreakReplLoop
+        raise Quit
       when ""
         # do nothing
       else
@@ -284,20 +329,13 @@ module CouchShell
       end
     end
 
-    def repl
+    # Start regular shell operation, i.e. reading commands from stdin and
+    # executing them. Returns when the user issues a quit command.
+    def read_execute_loop
       loop {
-        begin
-          rep
-        rescue Interrupt
-          @stdout.puts
-          errmsg "interrupted"
-        rescue UndefinedVariable => e
-          errmsg "Variable `" + e.varname + "' is not defined."
-        rescue ShellUserError => e
-          errmsg e.message
-        end
+        execute(read)
       }
-    rescue BreakReplLoop
+    rescue Quit
       msg "bye"
     end
 
@@ -325,7 +363,7 @@ module CouchShell
             end
           elsif c == ')'
             if expr
-              res << shell_eval(expr)
+              res << shell_eval(expr).to_s
               expr = nil
             else
               res << c
@@ -352,7 +390,8 @@ module CouchShell
         command_uuids nil
         if @responses.current(&:ok?)
           json = @responses.current.json
-          if json && (uuids = json["uuids"]) && uuids.kind_of?(Array) && uuids.size > 0
+          if json && (uuids = json.couch_shell_ruby_value!["uuids"]) &&
+              uuids.kind_of?(Array) && uuids.size > 0
             uuids[0]
           else
             raise ShellUserError,
@@ -416,7 +455,9 @@ module CouchShell
       else
         body = bodyarg
       end
-      request method, interpolate(url), body
+      real_url = interpolate(url)
+      request method, real_url, body
+      real_url
     end
 
     def editor_bin!
@@ -430,6 +471,11 @@ module CouchShell
 
     def command_put(argstr)
       request_command_with_body("PUT", argstr)
+    end
+
+    def command_cput(argstr)
+      url = request_command_with_body("PUT", argstr)
+      cd url if @responses.current(&:ok?)
     end
 
     def command_post(argstr)
@@ -449,11 +495,11 @@ module CouchShell
     end
 
     def command_exit(argstr)
-      raise BreakReplLoop
+      raise Quit
     end
 
     def command_quit(argstr)
-      raise BreakReplLoop
+      raise Quit
     end
 
     def command_uuids(argstr)
@@ -678,6 +724,14 @@ module CouchShell
         json.set_attr!(attr_name, new_val)
       end
       request "PUT", "?rev=#{rev}", json.to_s
+    end
+
+    def command_user(argstr)
+      prompt_msg("Password:", false)
+      @password = @highline.ask(" ") { |q| q.echo = "*" }
+      # we save the username only after the password was entered
+      # to allow cancellation during password input
+      @username = argstr
     end
 
   end

@@ -2,4 +2,4 @@
 
 require "couch-shell"
 
-CouchShell.run ARGV
+exit CouchShell.run(ARGV)
