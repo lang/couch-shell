@@ -27,5 +27,5 @@ Gem::Specification.new do |g|
   g.add_dependency "httpclient", ">= 2.1.6.1"
   g.add_dependency "highline", ">= 1.6.1"
   g.add_dependency "decorate", ">= 0.3.0"
-  g.add_depencency "unicode_utils", ">= 1.0.0"
+  g.add_dependency "unicode_utils", ">= 1.0.0"
 end
