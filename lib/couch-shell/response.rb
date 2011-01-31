@@ -15,25 +15,30 @@ module CouchShell
     # response
     def initialize(response)
       @res = response
-      @json = nil
-      @computed_json = false
+      @json_value = nil
+      @computed_json_value = false
     end
 
-    # Response body parsed as json. nil if body is empty, false if
-    # parsing failed.
+    # Response body parsed as json, represented as a ruby data structure. nil
+    # if body is empty, false if parsing failed.
     def json
-      unless @computed_json
+      json_value ? json_value.unwrapped! : json_value
+    end
+
+    # Like json, but wrapped in a CouchShell::JsonValue.
+    def json_value
+      unless @computed_json_value
         if JSON_CONTENT_TYPES.include?(content_type) &&
             !body.nil? && !body.empty?
           begin
-            @json = JsonValue.wrap(JSON.parse(body))
+            @json_value = JsonValue.wrap(JSON.parse(body))
           rescue JSON::ParserError
-            @json = false
+            @json_value = false
           end
         end
-        @computed_json = true
+        @computed_json_value = true
       end
-      @json
+      @json_value
     end
 
     def code
@@ -61,11 +66,11 @@ module CouchShell
     def attr(name, altname = nil)
       name = name.to_sym
       altname = altname ? altname.to_sym : nil
-      if json
-        if json.respond_to?(name)
-          json.__send__ name
-        elsif altname && json.respond_to?(altname)
-          json.__send__ altname
+      if json_value
+        if json_value.respond_to?(name)
+          json_value.__send__ name
+        elsif altname && json_value.respond_to?(altname)
+          json_value.__send__ altname
         end
       end
     end

@@ -4,12 +4,31 @@ require "json"
 
 module CouchShell
 
+  # Wraps a Ruby data structure that represents a json value. If the wrapped
+  # document is of type object, members can be accessed method call syntax. To
+  # avoid shadowing of object members, almost all JsonValue instance methods
+  # end in ! or ?.
+  #
+  #   j = JsonValue.wrap({"a" => 1})
+  #   j.a             # => #<JsonValue 1>
+  #   j.unwrapped!    # => {"a" => 1}
+  #
+  # Attributes can also be accessed via []
+  #
+  #   j["a"]          # => #<JsonValue 1>
+  #
+  # Arrays elements too
+  #
+  #   j = JsonValue.wrap(["a", "b"])
+  #   j[0]            # => #<JsonValue "a">
+  #
+  # The wrapped data structure mustn't be modified.
   class JsonValue < BasicObject
 
     def self.wrap(ruby_value)
       case ruby_value
       when ::Hash
-        h = ::Hash.new(ruby_value.size)
+        h = ::Hash.new
         ruby_value.each { |k, v|
           h[k] = wrap(v)
         }
@@ -36,6 +55,14 @@ module CouchShell
       end
     end
 
+    def self.rval(obj)
+      if obj.respond_to?(:couch_shell_ruby_value!)
+        obj.couch_shell_ruby_value!
+      else
+        obj
+      end
+    end
+
     def initialize(value, ruby_value)
       @value = value
       @ruby_value = ruby_value
@@ -59,9 +86,32 @@ module CouchShell
               end
     end
 
+    def object?
+      @type == :object
+    end
+
+    def array?
+      @type == :array
+    end
+
+    def string?
+      @type == :string
+    end
+
+    def number?
+      @type == :number
+    end
+
+    def boolean?
+      @type == :boolean
+    end
+
+    def null?
+      @type == :null
+    end
+
     def respond_to?(msg)
-      msg == :format || msg == :couch_shell_format_string ||
-        msg == :type || msg == :ruby_value || msg == :to_s ||
+      msg == :couch_shell_format_string! || msg == :to_s ||
         msg == :couch_shell_ruby_value! ||
         (@type == :object && @value.has_key?(msg.to_s))
     end
@@ -76,15 +126,38 @@ module CouchShell
       super
     end
 
+    # Access object member (i must be a string) or array element (i must be an
+    # integer). Returns a JsonValue or nil if the object member or array index
+    # doesn't exist.
     def [](i)
-      ::Kernel.raise ::TypeError unless @type == :array
-      @value[i]
+      ri = JsonValue.rval(i)
+      case ri
+      when ::String
+        unless @type == :object
+          ::Kernel.raise ::TypeError,
+            "string indexing only allowed for objects"
+        end
+        @value[ri]
+      when ::Integer
+        unless @type == :array
+          ::Kernel.raise ::TypeError,
+            "integer indexing only allowed for arrays"
+        end
+        @value[ri]
+      else
+        ::Kernel.raise ::TypeError,
+          "index must be string or integer"
+      end
     end
 
-    def to_s
+    def to_s(format = false)
       case @type
       when :object, :array
-        ::JSON.generate(@ruby_value)
+        if format
+          ::JSON.pretty_generate(@ruby_value)
+        else
+          ::JSON.generate(@ruby_value)
+        end
       when :null
         "null"
       else
@@ -92,19 +165,8 @@ module CouchShell
       end
     end
 
-    def format
-      case @type
-      when :object, :array
-        ::JSON.pretty_generate(@ruby_value)
-      when :null
-        "null"
-      when
-        @ruby_value.to_s
-      end
-    end
-
-    def couch_shell_format_string
-      format
+    def couch_shell_format_string!
+      to_s true
     end
 
     def delete_attr!(name)
@@ -124,6 +186,7 @@ module CouchShell
     def couch_shell_ruby_value!
       @ruby_value
     end
+    alias unwrapped! couch_shell_ruby_value!
 
     def nil?
       false
@@ -132,6 +195,15 @@ module CouchShell
     def attr_or_nil!(name)
       return nil unless @type == :object
       @value[name]
+    end
+
+    def inspect
+      "#<JsonValue #{to_s}>"
+    end
+
+    def length
+      raise ::TypeError, "length of #@type" unless array?
+      @ruby_value.length
     end
 
   end

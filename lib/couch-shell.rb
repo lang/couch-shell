@@ -42,6 +42,11 @@ module CouchShell
     end
 
     shell = Shell.new(STDIN, STDOUT, STDERR)
+    shell.plugin "core"
+    shell.plugin "core_edit"
+    shell.plugin "core_views"
+    shell.plugin "core_designs"
+    shell.plugin "core_lucene"
     shell.execute "user #{user}" if user
     shell.execute "server #{server}" if server
     shell.execute "cg #{path}" if path
