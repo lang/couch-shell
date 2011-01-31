@@ -26,4 +26,5 @@ Gem::Specification.new do |g|
   #g.rubyforge_project = "unicode-utils"
   g.add_dependency "httpclient", ">= 2.1.6.1"
   g.add_dependency "highline", ">= 1.6.1"
+  g.add_dependency "decorate", ">= 0.3.0"
 end
