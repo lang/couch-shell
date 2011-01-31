@@ -100,7 +100,7 @@ module CouchShell
     cmd "put, followed by cd if put was successful"
     def execute_cput(argstr)
       url = request_command_with_body("PUT", argstr)
-      cd url if shell.responses.current(&:ok?)
+      shell.cd url if shell.responses.current(&:ok?)
     end
 
     cmd "Perform a POST http request.",
