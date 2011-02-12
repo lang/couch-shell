@@ -42,6 +42,7 @@ module CouchShell
     end
 
     shell = Shell.new(STDIN, STDOUT, STDERR)
+    shell.plugin "core_help"
     shell.plugin "core"
     shell.plugin "core_edit"
     shell.plugin "core_views"
