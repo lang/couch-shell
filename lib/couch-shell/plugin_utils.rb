@@ -83,6 +83,19 @@ module CouchShell
       end
     end
 
+    def respond_to?(msg)
+      super || shell.respond_to?(msg)
+    end
+
+    # Tries to delegate msg to shell.
+    def method_missing(msg, *args)
+      if shell.respond_to?(msg)
+        shell.send msg, *args
+      else
+        super
+      end
+    end
+
   end
 
 end

@@ -57,6 +57,13 @@ module CouchShell
     end
 
     def help_vars
+      stdout.puts "Available unqualified variables:"
+      stdout.puts
+      variable_infos.each { |vi|
+        stdout.puts "  #{vi.label} (from #{vi.plugin.plugin_name})"
+        stdout.puts "    #{vi.doc_line}"
+        stdout.puts
+      }
     end
 
     def remove_base_indent(str)

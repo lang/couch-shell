@@ -1,7 +1,8 @@
 # -*- encoding: utf-8 -*-
 
-require "couch-shell/shell"
 require "couch-shell/commandline"
+require "couch-shell/shell"
+require "couch-shell/version"
 
 module CouchShell
 
@@ -41,6 +42,7 @@ module CouchShell
       return 1
     end
 
+    STDOUT.puts "couch-shell #{CouchShell::VERSION}"
     shell = Shell.new(STDIN, STDOUT, STDERR)
     shell.plugin "core_help"
     shell.plugin "core"

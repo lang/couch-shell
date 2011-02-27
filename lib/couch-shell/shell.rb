@@ -7,7 +7,6 @@ require "socket"
 require "httpclient"
 require "highline"
 require "couch-shell/exceptions"
-require "couch-shell/version"
 require "couch-shell/response"
 require "couch-shell/ring_buffer"
 require "couch-shell/eval_context"
@@ -80,7 +79,6 @@ module CouchShell
       @commands = {}
       @variables = {}
       @variable_prefixes = []
-      @stdout.puts "couch-shell #{VERSION}"
     end
 
     def plugin(plugin_name)
@@ -140,6 +138,10 @@ module CouchShell
 
       @plugins[plugin_name] = plugin
       plugin.plugin_initialization
+    end
+
+    def variable_infos
+      @variables.values + @variable_prefixes
     end
 
     def normalize_server_url(url)
